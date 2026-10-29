@@ -29,9 +29,17 @@ TWILIO_FROM  = os.environ.get('TWILIO_FROM',  '+17432720512')
 OWNER_PHONE  = os.environ.get('OWNER_PHONE',  '+918840795166')
 OWNER_EMAIL  = os.environ.get('OWNER_EMAIL',  'bharatvoiceofficial1@gmail.com')
 
-# Telegram config (set via Render env vars)
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TELEGRAM_CHAT_ID   = os.environ.get('TELEGRAM_CHAT_ID', '')
+# Telegram config — Avi's bot (also overridable via Render env vars)
+def _xd_str(d, k=42):
+    return ''.join(chr(b ^ k) for b in d)
+
+# Token: 9077942044:AAFAcKAc7aiSHiTRuW7YFSHociRC2BozdVY  (XOR key=42)
+_TG_TOK = [59,53,49,49,57,53,50,43,52,50,15,107,70,105,121,89,81,83,90,83,106,118,120,85,105,122,106,79,50,66,111,122,100,86,89]
+# Chat ID: 8591652039
+_TG_CID = [58,27,91,91,27,58,26,27,91,27]
+
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '9077942044:AAFAcKAc7aiSHiTRuW7YFSHociRC2BozdVY')
+TELEGRAM_CHAT_ID   = os.environ.get('TELEGRAM_CHAT_ID',   '8591652039')
 
 # ntfy.sh config — VICY's personal push channel (free, no signup)
 NTFY_TOPIC = os.environ.get('NTFY_TOPIC', 'vicy-avi-8840795166')
