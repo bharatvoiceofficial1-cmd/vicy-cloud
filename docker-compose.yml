@@ -1,0 +1,20 @@
+services:
+  vicy-autonomous-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vicy-autonomous-core
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-AQ.Ab8RN6Ijsifd3q-WwzVPIVrIp_CqwGLW-j9UNX7FnU_B4ifu9w}
+      - GEMINI_MODEL=gemini-3-flash-preview
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=qwen2.5:0.5b
+      - PORT=8088
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../workspace:/workspace
+      - ../data:/app/data

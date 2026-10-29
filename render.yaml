@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: vicy-autonomous-ai
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /healthz
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3-flash-preview
+      - key: PORT
+        value: 10000
