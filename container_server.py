@@ -85,6 +85,118 @@ def _keepalive_loop():
 threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 
+# ── Telegram Bot Command Listener ────────────────────────────────────────────
+
+TG_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "9077942044:AAFAcKAc7aiSHiTRuW7YFSHociRC2BozdVY")
+TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID",   "8591652039")   # Avi's chat ID
+
+
+def _tg_api(method: str, payload: dict) -> dict:
+    """Call any Telegram Bot API method."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TG_TOKEN}/{method}",
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        logger.warning("TG API %s error: %s", method, e)
+        return {}
+
+
+def _tg_reply(chat_id: str, text: str) -> None:
+    """Send emoji-decorated text reply to Avi on Telegram."""
+    from datetime import datetime
+    now = datetime.now().strftime("%I:%M %p")
+    decorated = (
+        "\U0001F916 VICY CLOUD RESPONSE\n"
+        "\u2500" * 16 + "\n"
+        f"{text}\n"
+        "\u2500" * 16 + "\n"
+        f"\U0001F554 {now}  \u26A1 Executed on VICY Cloud"
+    )
+    _tg_api("sendMessage", {"chat_id": chat_id, "text": decorated})
+
+
+def _tg_voice_reply(chat_id: str, text: str) -> None:
+    """Send TTS voice note reply to Avi on Telegram."""
+    try:
+        NOTIFIER.send_telegram_voice(text[:400])
+    except Exception as e:
+        logger.warning("TG voice reply error: %s", e)
+
+
+def _register_telegram_webhook() -> None:
+    """Register this server as Telegram webhook after startup."""
+    time.sleep(10)  # wait for server to be fully up
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not render_url:
+        logger.info("No RENDER_EXTERNAL_URL — skipping webhook registration (local mode).")
+        return
+    webhook_url = f"{render_url}/telegram/webhook"
+    result = _tg_api("setWebhook", {"url": webhook_url, "allowed_updates": ["message"]})
+    if result.get("ok"):
+        logger.info("Telegram webhook registered: %s", webhook_url)
+    else:
+        logger.warning("Webhook registration failed: %s", result)
+
+
+threading.Thread(target=_register_telegram_webhook, daemon=True).start()
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request) -> dict:
+    """
+    Telegram Webhook — receives messages Avi sends to @VICYavi_bot.
+    Executes the command on VICY's cloud computer and replies with result.
+    Only processes messages from Avi's verified chat ID.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": True}
+
+    message = body.get("message", {})
+    chat_id  = str(message.get("chat", {}).get("id", ""))
+    text     = (message.get("text") or "").strip()
+    username = message.get("from", {}).get("username", "unknown")
+
+    logger.info("Telegram msg from chat_id=%s user=%s: %s", chat_id, username, text[:80])
+
+    # Security: only accept messages from Avi's chat
+    if chat_id != TG_CHAT_ID:
+        logger.warning("Rejected Telegram msg from unknown chat_id: %s", chat_id)
+        return {"ok": True}
+
+    if not text:
+        return {"ok": True}
+
+    # Send instant acknowledgement so Avi knows it's working
+    _tg_api("sendMessage", {
+        "chat_id": chat_id,
+        "text": f"\u23F3 VICY received: \"{text[:60]}\"\nExecuting on cloud computer..."
+    })
+
+    # Execute instruction on VICY's autonomous agent
+    def _run_and_reply():
+        try:
+            result = agent.execute_instruction(text)
+            reply  = result.get("reply") or str(result.get("result", ""))
+            if not reply:
+                reply = str(result)[:500]
+            # Send text + voice reply back to Avi
+            _tg_reply(chat_id, reply[:1000])
+            _tg_voice_reply(chat_id, reply)
+        except Exception as e:
+            _tg_reply(chat_id, f"Error executing command: {e}")
+
+    threading.Thread(target=_run_and_reply, daemon=True).start()
+    return {"ok": True}
+
+
 # ── Web UI Dashboard ────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
