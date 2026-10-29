@@ -180,7 +180,23 @@ class AutonomousAgent:
             cmd = instruction.replace("bash", "").replace("run", "").strip()
             return {"action": "bash", "command": cmd, "reason": "User command"}
 
-        return {"action": "chat_response", "reply": f"Hello Avi, I am online in your autonomous 24/7 cloud computer. Ready for your instructions."}
+        # Smart keyword fallbacks
+        if "fetch" in lower or ("http" in lower and "scrape" not in lower):
+            m = re.search(r"https?://[^\s]+", instruction)
+            url = m.group(0) if m else "https://httpbin.org/json"
+            return {"action": "fetch_web", "url": url}
+
+        if ("notify" in lower or "message me" in lower or "alert me" in lower) and ("telegram" in lower or "send" in lower):
+            clean = re.sub(r"notify( me)?( on)?( telegram)?|send( me)?|alert( me)?", "", instruction, flags=re.I).strip()
+            return {"action": "notify_telegram", "message": clean or "VICY notification", "title": "VICY Alert"}
+
+        if "push" in lower or "ntfy" in lower:
+            return {"action": "notify_push", "message": instruction, "title": "VICY"}
+
+        if "system" in lower or ("status" in lower and "website" not in lower):
+            return {"action": "system_status"}
+
+        return {"action": "chat_response", "reply": f"Hello Avi! Processing your request: {instruction[:120]}"}
 
     def execute_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """Dispatch action to container tools or social plugins."""

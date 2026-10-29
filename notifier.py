@@ -263,3 +263,39 @@ if __name__ == '__main__':
         title="VICY System Test"
     )
     print(json.dumps(result, indent=2))
+
+# ── Public aliases so autonomous_agent.py can call these directly ─────────────
+def send_telegram_text(message: str, title: str = 'VICY') -> bool:
+    """Public alias for _tg_send_text with emoji decoration."""
+    try:
+        now = datetime.now().strftime('%I:%M %p')
+        text = (
+            'VICY AUTONOMOUS AI\n'
+            '----------------\n'
+            f'{title}\n\n'
+            f'{message}\n\n'
+            '----------------\n'
+            f'{now}  | 24/7 Cloud Active'
+        )
+        payload = json.dumps({'chat_id': TELEGRAM_CHAT_ID, 'text': text}).encode('utf-8')
+        req = urllib.request.Request(
+            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
+            data=payload,
+            headers={'Content-Type': 'application/json; charset=utf-8'}
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read()).get('ok', False)
+    except Exception as e:
+        logger.warning(f'send_telegram_text failed: {e}')
+        return False
+
+
+def send_telegram_voice(message: str) -> bool:
+    """Public alias for _tg_send_voice."""
+    return _tg_send_voice(message)
+
+
+def send_push(message: str, title: str = 'VICY') -> bool:
+    """Public alias for ntfy push notification."""
+    result = notify_push(message, title)
+    return result.get('success', False)
