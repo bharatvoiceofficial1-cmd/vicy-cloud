@@ -29,14 +29,13 @@ from pydantic import BaseModel
 import uvicorn
 
 from autonomous_agent import AutonomousAgent
-from notifier import Notifier
+import notifier as NOTIFIER
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("vicy_cloud")
 
 app = FastAPI(title="VICY 24/7 Autonomous Cloud Core")
 agent = AutonomousAgent()
-notifier = Notifier()
 active_sockets: list[WebSocket] = []
 START_TIME = time.time()
 
@@ -289,15 +288,23 @@ async def root() -> str:
 
 # ── Interactive Phone Call Voice IVR (Avi can talk on the phone!) ────────────
 
+@app.get("/api/voice/ivr")
 @app.post("/api/voice/ivr")
 async def voice_ivr_webhook(request: Request) -> Response:
     """
-    Twilio Voice Webhook:
+    Twilio Voice Webhook (GET + POST):
     When Avi speaks over the phone, Twilio sends SpeechResult.
     VICY executes the spoken command and speaks back!
     """
-    form_data = await request.form()
-    speech_result = form_data.get("SpeechResult", "")
+    try:
+        form_data = await request.form()
+        speech_result = form_data.get("SpeechResult", "")
+    except Exception:
+        speech_result = ""
+
+    if not speech_result:
+        params = dict(request.query_params)
+        speech_result = params.get("SpeechResult", "")
 
     if speech_result:
         logger.info("Avi spoke command over phone: %s", speech_result)
@@ -358,11 +365,11 @@ async def orchestrate_task(req: OrchestrateRequest) -> dict[str, Any]:
     result = agent.execute_instruction(req.instruction)
     summary = str(result.get("reply") or result.get("result") or result)[:400]
     
-    # Notify Avi via Call -> SMS -> Email
-    notify_res = notifier.notify_task_complete(
-        task_name=req.task_name,
-        result_summary=summary,
-        pc_is_online=False
+    # Notify Avi via ALL channels: Call -> SMS -> Telegram -> Push -> Email
+    notify_res = NOTIFIER.notify_avi(
+        message=f"Task '{req.task_name}' complete: {summary}",
+        title=f"VICY: {req.task_name}",
+        call=True
     )
     return {
         "task_name": req.task_name,
@@ -386,6 +393,26 @@ async def schedule_task(req: ScheduleTaskRequest) -> dict[str, Any]:
 @app.get("/api/files")
 async def list_files(subpath: str = "") -> dict[str, Any]:
     return agent.tools.list_files(subpath)
+
+
+class NotifyRequest(BaseModel):
+    message: str
+    title: str = "VICY Alert"
+    call: bool = False
+
+
+@app.post("/api/notify")
+async def push_notification(req: NotifyRequest) -> dict[str, Any]:
+    """Push notification to Avi via all channels immediately."""
+    result = NOTIFIER.notify_avi(req.message, req.title, req.call)
+    return result
+
+
+@app.get("/api/push")
+async def quick_push(msg: str = "VICY ping", title: str = "VICY") -> dict[str, Any]:
+    """Quick GET-based push for easy testing."""
+    result = NOTIFIER.notify_avi(msg, title, call=False)
+    return result
 
 
 @app.websocket("/ws")

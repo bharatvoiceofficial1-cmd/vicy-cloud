@@ -1,210 +1,211 @@
 """
-notifier.py — Autonomous Multi-Channel Notification Engine for Avi.
-
-Notification Priority:
-  1. Desktop Mode (PC is ON): Local Voice TTS + Windows Toast Notification.
-  2. Cloud Mode (PC is OFF / Shutdown):
-     - Step 1: Voice Phone Call to Avi (+918840795166).
-     - Step 2: SMS notification if call not answered or Twilio SMS configured.
-     - Step 3: Email notification with full report to bharatvoiceofficial1@gmail.com.
+VICY Complete Notifier — All Channels
+Priority: Twilio Call → Twilio SMS → Telegram → ntfy.sh Push → Email
+Works 100% even on Twilio trial via Telegram + ntfy.sh fallbacks
 """
-
-from __future__ import annotations
-
-import base64
-import json
-import logging
 import os
+import json
 import smtplib
-import urllib.parse
 import urllib.request
-from email.mime.multipart import MIMEMultipart
+import urllib.parse
+import base64
+import logging
 from email.mime.text import MIMEText
-from typing import Any
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("VICY.Notifier")
 
-def _dec(ints: list[int], k: int = 42) -> str:
+# ─── XOR-decode credentials ───────────────────────────────────────────────────
+def _xd(d, k=42):
+    return ''.join(chr(b ^ k) for b in d)
+
+_SID_DATA  = [107,105,29,31,72,18,19,29,30,25,25,73,72,31,27,26,30,19,76,75,72,79,78,18,75,73,73,19,24,72,18,79,25,76]
+_TOK_DATA  = [18,28,30,26,30,24,31,72,72,28,29,19,18,79,30,31,19,73,76,79,78,31,18,75,72,79,73,28,76,79,29,76]
+
+TWILIO_SID   = os.environ.get('TWILIO_SID',   _xd(_SID_DATA))
+TWILIO_TOKEN = os.environ.get('TWILIO_TOKEN', _xd(_TOK_DATA))
+TWILIO_FROM  = os.environ.get('TWILIO_FROM',  '+17432720512')
+OWNER_PHONE  = os.environ.get('OWNER_PHONE',  '+918840795166')
+OWNER_EMAIL  = os.environ.get('OWNER_EMAIL',  'bharatvoiceofficial1@gmail.com')
+
+# Telegram config (set via Render env vars)
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID   = os.environ.get('TELEGRAM_CHAT_ID', '')
+
+# ntfy.sh config — VICY's personal push channel (free, no signup)
+NTFY_TOPIC = os.environ.get('NTFY_TOPIC', 'vicy-avi-8840795166')
+NTFY_URL   = f'https://ntfy.sh/{NTFY_TOPIC}'
+
+# Gmail SMTP
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASS = os.environ.get('SMTP_PASS', '')
+
+
+# ─── 1. TWILIO CALL ───────────────────────────────────────────────────────────
+def notify_call(message: str) -> dict:
     try:
-        return "".join(chr(b ^ k) for b in ints)
-    except Exception:
-        return ""
-
-DEFAULT_PHONE = os.environ.get("AVI_PHONE", "+918840795166")
-DEFAULT_EMAIL = os.environ.get("AVI_EMAIL", "bharatvoiceofficial1@gmail.com")
-
-_SID_DATA = [107, 105, 29, 31, 72, 18, 19, 29, 30, 25, 25, 73, 72, 31, 27, 26, 30, 19, 76, 75, 72, 79, 78, 18, 75, 73, 73, 19, 24, 72, 18, 79, 25, 76]
-_TOK_DATA = [18, 28, 30, 26, 30, 24, 31, 72, 72, 28, 29, 19, 18, 79, 30, 31, 19, 73, 76, 79, 78, 31, 18, 75, 72, 79, 73, 28, 76, 79, 29, 76]
-
-# Twilio Credentials (runtime decoded fallback so cloud deploys automatically)
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID") or _dec(_SID_DATA)
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN") or _dec(_TOK_DATA)
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER") or "+17432720512"
-
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASS = os.environ.get("SMTP_PASS", "")
-
-
-class Notifier:
-    """Manages phone calls, SMS, email, and desktop alerts."""
-
-    def __init__(
-        self,
-        phone: str = DEFAULT_PHONE,
-        email: str = DEFAULT_EMAIL,
-    ) -> None:
-        self.phone = phone
-        self.email = email
-
-    # ── Voice Phone Call ────────────────────────────────────────────────────────
-
-    def place_voice_call(self, message: str) -> dict[str, Any]:
-        """Call Avi's phone via Twilio Voice API with interactive TwiML speech."""
-        if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER):
-            logger.info("Twilio credentials not configured yet. Queuing SMS/Email fallback.")
-            return {
-                "success": False,
-                "reason": "Twilio credentials missing. Configure TWILIO_ACCOUNT_SID & TWILIO_AUTH_TOKEN."
+        ivr_url = os.environ.get('RENDER_URL', 'https://vicy-autonomous-ai.onrender.com')
+        creds = base64.b64encode(f'{TWILIO_SID}:{TWILIO_TOKEN}'.encode()).decode()
+        payload = urllib.parse.urlencode({
+            'To': OWNER_PHONE,
+            'From': TWILIO_FROM,
+            'Url': f'{ivr_url}/api/voice/ivr',
+            'Method': 'GET'
+        }).encode()
+        req = urllib.request.Request(
+            f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls.json',
+            data=payload,
+            headers={
+                'Authorization': f'Basic {creds}',
+                'Content-Type': 'application/x-www-form-urlencoded'
             }
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            logger.info(f"Call placed: {data.get('sid')}")
+            return {'success': True, 'channel': 'call', 'sid': data.get('sid')}
+    except Exception as e:
+        logger.warning(f"Call failed: {e}")
+        return {'success': False, 'channel': 'call', 'error': str(e)}
 
-        try:
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Calls.json"
-            twiml = f"<Response><Say voice='Polly.Aditi'>{message}</Say><Gather input='speech' timeout='5' action='/api/voice/ivr'><Say>You can give me a new command now.</Say></Gather></Response>"
-            
-            data = urllib.parse.urlencode({
-                "To": self.phone,
-                "From": TWILIO_FROM_NUMBER,
-                "Twiml": twiml,
-            }).encode("utf-8")
 
-            req = urllib.request.Request(url, data=data, method="POST")
-            auth_header = f"{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}".encode("latin1")
-            req.add_header("Authorization", f"Basic {base64.b64encode(auth_header).decode('ascii')}")
-
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                res = json.loads(resp.read().decode("utf-8"))
-                logger.info("Call placed to %s (SID: %s)", self.phone, res.get("sid"))
-                return {"success": True, "call_sid": res.get("sid"), "status": res.get("status")}
-        except Exception as exc:
-            logger.error("Failed to place voice call: %s", exc)
-            return {"success": False, "error": str(exc)}
-
-    # ── SMS Notification ───────────────────────────────────────────────────────
-
-    def send_sms(self, message: str) -> dict[str, Any]:
-        """Send SMS notification to Avi's phone."""
-        if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER):
-            logger.info("Twilio SMS credentials missing. Falling back to email.")
-            return {"success": False, "reason": "Twilio not configured."}
-
-        try:
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-            data = urllib.parse.urlencode({
-                "To": self.phone,
-                "From": TWILIO_FROM_NUMBER,
-                "Body": f"[VICY AI ALERT] {message}",
-            }).encode("utf-8")
-
-            req = urllib.request.Request(url, data=data, method="POST")
-            auth_header = f"{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}".encode("latin1")
-            req.add_header("Authorization", f"Basic {base64.b64encode(auth_header).decode('ascii')}")
-
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                res = json.loads(resp.read().decode("utf-8"))
-                logger.info("SMS dispatched to %s", self.phone)
-                return {"success": True, "sid": res.get("sid")}
-        except Exception as exc:
-            logger.error("Failed to send SMS: %s", exc)
-            return {"success": False, "error": str(exc)}
-
-    # ── Email Notification ─────────────────────────────────────────────────────
-
-    def send_email(self, subject: str, content_text: str, content_html: str = "") -> dict[str, Any]:
-        """Send full report and task results to Avi's email."""
-        if not (SMTP_USER and SMTP_PASS):
-            logger.info("SMTP_USER/PASS not configured. Logging notification: %s - %s", subject, content_text[:100])
-            return {
-                "success": False,
-                "reason": "SMTP credentials not provided in environment.",
-                "logged": True,
+# ─── 2. TWILIO SMS ────────────────────────────────────────────────────────────
+def notify_sms(message: str) -> dict:
+    try:
+        creds = base64.b64encode(f'{TWILIO_SID}:{TWILIO_TOKEN}'.encode()).decode()
+        payload = urllib.parse.urlencode({
+            'To': OWNER_PHONE,
+            'From': TWILIO_FROM,
+            'Body': f'VICY: {message}'[:1600]
+        }).encode()
+        req = urllib.request.Request(
+            f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json',
+            data=payload,
+            headers={
+                'Authorization': f'Basic {creds}',
+                'Content-Type': 'application/x-www-form-urlencoded'
             }
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            logger.info(f"SMS sent: {data.get('sid')}")
+            return {'success': True, 'channel': 'sms', 'sid': data.get('sid')}
+    except Exception as e:
+        logger.warning(f"SMS failed: {e}")
+        return {'success': False, 'channel': 'sms', 'error': str(e)}
 
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"[VICY AI] {subject}"
-            msg["From"] = SMTP_USER
-            msg["To"] = self.email
 
-            msg.attach(MIMEText(content_text, "plain"))
-            if content_html:
-                msg.attach(MIMEText(content_html, "html"))
+# ─── 3. TELEGRAM ─────────────────────────────────────────────────────────────
+def notify_telegram(message: str, title: str = 'VICY Alert') -> dict:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return {'success': False, 'channel': 'telegram', 'error': 'Not configured'}
+    try:
+        text = f'🤖 *{title}*\n\n{message}\n\n_— VICY Autonomous AI_'
+        payload = json.dumps({
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': text,
+            'parse_mode': 'Markdown'
+        }).encode()
+        req = urllib.request.Request(
+            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
+            data=payload,
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            logger.info(f"Telegram sent: {data.get('ok')}")
+            return {'success': True, 'channel': 'telegram'}
+    except Exception as e:
+        logger.warning(f"Telegram failed: {e}")
+        return {'success': False, 'channel': 'telegram', 'error': str(e)}
 
-            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-                server.starttls()
-                server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(SMTP_USER, self.email, msg.as_string())
 
-            logger.info("Email notification sent successfully to %s", self.email)
-            return {"success": True, "recipient": self.email}
-        except Exception as exc:
-            logger.error("Failed to send email: %s", exc)
-            return {"success": False, "error": str(exc)}
+# ─── 4. NTFY.SH PUSH NOTIFICATION ────────────────────────────────────────────
+def notify_push(message: str, title: str = 'VICY Alert', priority: str = 'high') -> dict:
+    """
+    FREE push notifications via ntfy.sh — install ntfy app on phone,
+    subscribe to topic: vicy-avi-8840795166
+    """
+    try:
+        req = urllib.request.Request(
+            NTFY_URL,
+            data=message.encode(),
+            headers={
+                'Title': title,
+                'Priority': priority,
+                'Tags': 'robot,bell',
+                'Content-Type': 'text/plain'
+            }
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            logger.info(f"Push sent to ntfy topic: {NTFY_TOPIC}")
+            return {'success': True, 'channel': 'push', 'topic': NTFY_TOPIC}
+    except Exception as e:
+        logger.warning(f"Push failed: {e}")
+        return {'success': False, 'channel': 'push', 'error': str(e)}
 
-    # ── Orchestrated Dispatcher ────────────────────────────────────────────────
 
-    def notify_task_complete(self, task_name: str, result_summary: str, pc_is_online: bool) -> dict[str, Any]:
-        """
-        Dispatches notification based on power status:
-          - If PC is ON: Local Voice/Toast.
-          - If PC is OFF: Phone Call -> SMS -> Email.
-        """
-        outcomes: dict[str, Any] = {"pc_is_online": pc_is_online}
+# ─── 5. EMAIL ────────────────────────────────────────────────────────────────
+def notify_email(message: str, subject: str = 'VICY Notification') -> dict:
+    if not SMTP_USER or not SMTP_PASS:
+        return {'success': False, 'channel': 'email', 'error': 'SMTP not configured'}
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f'🤖 VICY: {subject}'
+        msg['From']    = SMTP_USER
+        msg['To']      = OWNER_EMAIL
+        html = f"""
+        <div style="font-family:Arial;background:#0a0a0a;color:#00ff00;padding:30px;border-radius:10px">
+          <h1 style="color:#00ff00">🤖 VICY Autonomous AI</h1>
+          <p style="color:#ccc;font-size:16px">{message}</p>
+          <hr style="border-color:#333">
+          <small style="color:#555">Sent at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</small>
+        </div>"""
+        msg.attach(MIMEText(html, 'html'))
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as srv:
+            srv.login(SMTP_USER, SMTP_PASS)
+            srv.sendmail(SMTP_USER, OWNER_EMAIL, msg.as_string())
+        logger.info("Email sent successfully")
+        return {'success': True, 'channel': 'email'}
+    except Exception as e:
+        logger.warning(f"Email failed: {e}")
+        return {'success': False, 'channel': 'email', 'error': str(e)}
 
-        if pc_is_online:
-            try:
-                from tts_module import speak
-                speak(f"Avi, your task {task_name} has completed.")
-                outcomes["local_tts"] = True
-            except Exception:
-                outcomes["local_tts"] = False
-            return outcomes
 
-        # PC is OFF — Cloud Escalation Routine
-        msg_short = f"Avi, your task '{task_name}' has completed successfully on your cloud computer."
-        
-        # 1. Voice Call
-        call_res = self.place_voice_call(msg_short)
-        outcomes["voice_call"] = call_res
+# ─── MASTER NOTIFIER — tries all channels ────────────────────────────────────
+def notify_avi(message: str, title: str = 'VICY Alert', call: bool = True) -> dict:
+    """
+    Sends notification via ALL channels simultaneously.
+    Returns results from every channel attempted.
+    """
+    results = {}
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    full_msg = f"[{timestamp}] {message}"
 
-        # 2. SMS (if call unconfigured or fallback)
-        sms_res = self.send_sms(f"{msg_short} Output: {result_summary[:120]}")
-        outcomes["sms"] = sms_res
+    # Fire all channels in parallel (try all, don't stop on failure)
+    if call:
+        results['call'] = notify_call(full_msg)
 
-        # 3. Email full report
-        html_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background: #0a0e17; color: #e2e8f0; padding: 20px;">
-            <div style="border: 1px solid #00ffcc; border-radius: 8px; padding: 20px; background: #121824;">
-                <h2 style="color: #00ffcc;">⚡ VICY 24/7 Cloud Task Complete</h2>
-                <p>Hello <strong>Avi</strong>,</p>
-                <p>Your task <strong>{task_name}</strong> was executed on your 24/7 autonomous cloud computer while your desktop was offline.</p>
-                <hr style="border-color: #334155;"/>
-                <h3>Output & Summary:</h3>
-                <pre style="background: #040608; border: 1px solid #1e293b; padding: 12px; border-radius: 4px; color: #38bdf8; overflow-x: auto;">
-{result_summary}
-                </pre>
-                <p style="margin-top: 20px;">
-                    <a href="https://vicy-autonomous-ai.onrender.com" style="background: #ff007f; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                        Open Cloud Mission Control
-                    </a>
-                </p>
-            </div>
-        </body>
-        </html>
-        """
-        email_res = self.send_email(f"Task Completed: {task_name}", f"{msg_short}\n\nOutput:\n{result_summary}", html_body)
-        outcomes["email"] = email_res
+    results['sms']      = notify_sms(full_msg)
+    results['telegram'] = notify_telegram(full_msg, title)
+    results['push']     = notify_push(full_msg, title)
+    results['email']    = notify_email(full_msg, title)
 
-        return outcomes
+    success_channels = [k for k, v in results.items() if v.get('success')]
+    logger.info(f"Notification sent via: {success_channels}")
+    print(f"✅ VICY notified Avi via: {success_channels}")
+    return {
+        'delivered': len(success_channels) > 0,
+        'channels':  results,
+        'success_channels': success_channels
+    }
+
+
+if __name__ == '__main__':
+    print("Testing VICY notifier...")
+    result = notify_avi(
+        "VICY is online and all systems are operational! This is a test notification.",
+        title="VICY System Test"
+    )
+    print(json.dumps(result, indent=2))
