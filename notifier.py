@@ -106,7 +106,7 @@ def notify_sms(message: str) -> dict:
 
 # ─── 3. TELEGRAM TEXT + VOICE ────────────────────────────────────────────────
 def _tg_send_text(text: str) -> bool:
-    payload = json.dumps({'chat_id': TELEGRAM_CHAT_ID, 'text': text}).encode('utf-8')
+    payload = json.dumps({'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML'}).encode('utf-8')
     req = urllib.request.Request(
         f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
         data=payload,
@@ -149,7 +149,19 @@ def notify_telegram(message: str, title: str = 'VICY Alert') -> dict:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return {'success': False, 'channel': 'telegram', 'error': 'Not configured'}
     try:
-        text_ok  = _tg_send_text(f'VICY | {title}\n\n{message}')
+        now = datetime.now().strftime('%d %b %Y • %I:%M %p')
+        decorated = (
+            f'\n'
+            f'<b>&#128640; VICY AUTONOMOUS AI</b>\n'
+            f'&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;\n'
+            f'&#128276; <b>{title}</b>\n\n'
+            f'&#129302; {message}\n\n'
+            f'&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;&#8213;\n'
+            f'&#128197; {now}\n'
+            f'&#128241; Sent to Avi by VICY\n'
+            f'&#9889; 24/7 Cloud Active'
+        )
+        text_ok  = _tg_send_text(decorated)
         voice_ok = _tg_send_voice(f'Hey Avi! {title}. {message}')
         logger.info(f"Telegram text={text_ok} voice={voice_ok}")
         return {'success': text_ok or voice_ok, 'channel': 'telegram', 'voice': voice_ok, 'text': text_ok}
@@ -214,24 +226,29 @@ def notify_email(message: str, subject: str = 'VICY Notification') -> dict:
 def notify_avi(message: str, title: str = 'VICY Alert', call: bool = True) -> dict:
     """
     Sends notification via ALL channels simultaneously.
-    Returns results from every channel attempted.
+    Telegram (voice + emoji text) ALWAYS fires — PC ON or OFF.
     """
     results = {}
     timestamp = datetime.now().strftime('%H:%M:%S')
     full_msg = f"[{timestamp}] {message}"
 
-    # Fire all channels in parallel (try all, don't stop on failure)
+    # Telegram ALWAYS fires (PC ON or OFF) — voice note + emoji text
+    results['telegram'] = notify_telegram(full_msg, title)
+
+    # ntfy push ALWAYS fires
+    results['push'] = notify_push(full_msg, title)
+
+    # Call + SMS only when explicitly requested (PC OFF tasks)
     if call:
         results['call'] = notify_call(full_msg)
+        results['sms']  = notify_sms(full_msg)
 
-    results['sms']      = notify_sms(full_msg)
-    results['telegram'] = notify_telegram(full_msg, title)
-    results['push']     = notify_push(full_msg, title)
-    results['email']    = notify_email(full_msg, title)
+    # Email always
+    results['email'] = notify_email(full_msg, title)
 
     success_channels = [k for k, v in results.items() if v.get('success')]
     logger.info(f"Notification sent via: {success_channels}")
-    print(f"✅ VICY notified Avi via: {success_channels}")
+    print(f"VICY notified Avi via: {success_channels}")
     return {
         'delivered': len(success_channels) > 0,
         'channels':  results,
