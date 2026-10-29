@@ -104,26 +104,55 @@ def notify_sms(message: str) -> dict:
         return {'success': False, 'channel': 'sms', 'error': str(e)}
 
 
-# ─── 3. TELEGRAM ─────────────────────────────────────────────────────────────
+# ─── 3. TELEGRAM TEXT + VOICE ────────────────────────────────────────────────
+def _tg_send_text(text: str) -> bool:
+    payload = json.dumps({'chat_id': TELEGRAM_CHAT_ID, 'text': text}).encode('utf-8')
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
+        data=payload,
+        headers={'Content-Type': 'application/json; charset=utf-8'}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read()).get('ok', False)
+
+
+def _tg_send_voice(text: str) -> bool:
+    """Convert text to speech and send as Telegram voice note."""
+    try:
+        from gtts import gTTS
+        import tempfile, os
+        tts = gTTS(text=text, lang='en', slow=False)
+        tmp = tempfile.NamedTemporaryFile(suffix='.ogg', delete=False)
+        tmp.close()
+        tts.save(tmp.name)
+        boundary = 'VICYBound'
+        with open(tmp.name, 'rb') as f:
+            audio = f.read()
+        body = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{TELEGRAM_CHAT_ID}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="voice"; filename="vicy.ogg"\r\nContent-Type: audio/ogg\r\n\r\n'
+        ).encode() + audio + f'\r\n--{boundary}--\r\n'.encode()
+        req = urllib.request.Request(
+            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVoice',
+            data=body,
+            headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            os.unlink(tmp.name)
+            return json.loads(r.read()).get('ok', False)
+    except Exception as e:
+        logger.warning(f"TG voice failed: {e}")
+        return False
+
+
 def notify_telegram(message: str, title: str = 'VICY Alert') -> dict:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return {'success': False, 'channel': 'telegram', 'error': 'Not configured'}
     try:
-        text = f'🤖 *{title}*\n\n{message}\n\n_— VICY Autonomous AI_'
-        payload = json.dumps({
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': text,
-            'parse_mode': 'Markdown'
-        }).encode()
-        req = urllib.request.Request(
-            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-            data=payload,
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
-            logger.info(f"Telegram sent: {data.get('ok')}")
-            return {'success': True, 'channel': 'telegram'}
+        text_ok  = _tg_send_text(f'VICY | {title}\n\n{message}')
+        voice_ok = _tg_send_voice(f'Hey Avi! {title}. {message}')
+        logger.info(f"Telegram text={text_ok} voice={voice_ok}")
+        return {'success': text_ok or voice_ok, 'channel': 'telegram', 'voice': voice_ok, 'text': text_ok}
     except Exception as e:
         logger.warning(f"Telegram failed: {e}")
         return {'success': False, 'channel': 'telegram', 'error': str(e)}
