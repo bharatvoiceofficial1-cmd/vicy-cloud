@@ -1,11 +1,12 @@
 """
-autonomous_agent.py — The Autonomous Container Agent Brain.
+autonomous_agent.py — The Autonomous Container Agent Brain for Avi.
 
 Runs inside the Docker Linux environment. Capabilities:
   - Full bash execution, file management, and web browsing in `/workspace`
   - Autonomous task execution (single turn, multi-step, or scheduled)
   - Uses Gemini Cloud or Local Ollama on host
-  - Long-term persistent memory
+  - Long-term persistent memory for user Avi (+918840795166)
+  - Social Media & Live Website management suite (YouTube, Meta/Instagram/FB, WhatsApp, LinkedIn, WordPress)
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from google.genai import types
 from sandbox_tools import SandboxTools
 from task_daemon import TaskDaemon
 from memory_store import MemoryStore
+from social_web_plugins.plugin_manager import SocialWebPluginSuite
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +36,21 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b")
 
 SYSTEM_PROMPT = """
 You are VICY AUTONOMOUS CORE, an intelligent AI agent running on your OWN DEDICATED LINUX COMPUTER inside a Docker sandbox.
+The user and owner is AVI. Always address the user respectfully as Avi.
+
 You have FULL ROOT and USER CAPABILITIES on this virtual computer:
 1. You can run any bash command (pip install, python, git, curl, apt-get, compiling, background scripts) in /workspace.
 2. You can read, write, and create files, datasets, projects, and web applications in /workspace.
 3. You can fetch and scrape websites, APIs, and online data.
 4. You can schedule autonomous recurring background tasks (e.g., hourly scrapes, daily reports, monitoring).
-5. You have persistent memory of the user, their preferences, and previous tasks.
+5. You have persistent memory of Avi, his preferences, phone (+918840795166), and past instructions.
+6. Social Media & Live Website Management:
+   - Check live website health & response time.
+   - Publish / draft articles to WordPress website.
+   - Publish Facebook page updates and Instagram posts.
+   - Share LinkedIn articles and posts.
+   - Send WhatsApp Business notifications and broadcasts.
+   - Search YouTube videos and generate SEO titles/descriptions/tags.
 
 When given an instruction, decide the action to take and return STRICTLY a JSON object without markdown fences:
 
@@ -51,8 +62,16 @@ Available Actions:
 - {"action": "fetch_web", "url": "<https://...>"}
 - {"action": "schedule_task", "name": "<task name>", "instruction": "<what to do>", "interval_minutes": <int>}
 - {"action": "run_async", "name": "<task name>", "instruction": "<long running instruction>"}
+- {"action": "check_site_health", "url": "<website url>"}
+- {"action": "publish_wordpress_post", "title": "<title>", "content": "<content>", "status": "<publish | draft>"}
+- {"action": "post_facebook", "message": "<message>", "link": "<optional url>"}
+- {"action": "post_instagram", "image_url": "<image url>", "caption": "<caption>"}
+- {"action": "post_linkedin", "text": "<text>", "article_url": "<optional url>"}
+- {"action": "send_whatsapp_business", "phone": "<recipient phone>", "text": "<message>"}
+- {"action": "youtube_seo", "topic": "<topic>"}
+- {"action": "search_youtube", "query": "<search query>"}
 - {"action": "system_status"}
-- {"action": "chat_response", "reply": "<conversational answer or summary of results>"}
+- {"action": "chat_response", "reply": "<conversational answer or summary of results addressed to Avi>"}
 - {"action": "remember_fact", "fact": "<fact to store>", "reply": "<confirmation>"}
 """.strip()
 
@@ -60,18 +79,25 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
 class AutonomousAgent:
-    """Core autonomous agent operating inside the Docker sandbox."""
+    """Core autonomous agent operating inside the Docker sandbox for Avi."""
 
     def __init__(self) -> None:
         self.tools = SandboxTools()
         self.memory = MemoryStore(filepath=Path("/app/data/memory.json"))
+        # Ensure owner is set to Avi
+        if not self.memory.get_user_property("name"):
+            self.memory.set_user_property("name", "Avi")
+            self.memory.set_user_property("phone", "8840795166")
+            self.memory.set_user_property("email", "bharatvoiceofficial1@gmail.com")
+
+        self.plugins = SocialWebPluginSuite()
         self.task_daemon = TaskDaemon(execute_callback=self.execute_instruction)
         self.client = None
 
         if GEMINI_API_KEY:
             try:
                 self.client = genai.Client(api_key=GEMINI_API_KEY)
-                logger.info("Gemini client initialized in container.")
+                logger.info("Gemini client initialized in container for Avi.")
             except Exception as e:
                 logger.warning("Gemini init error: %s", e)
 
@@ -130,17 +156,34 @@ class AutonomousAgent:
             except Exception:
                 pass
 
-        # 3. Rule fallback
-        if "bash" in instruction.lower() or "run " in instruction.lower():
+        # 3. Fast Rule Fallback for common commands
+        lower = instruction.lower()
+        if "website" in lower and ("status" in lower or "health" in lower or "uptime" in lower or "check" in lower):
+            m_url = re.search(r"https?://[^\s]+", instruction)
+            target_url = m_url.group(0) if m_url else "https://google.com"
+            return {"action": "check_site_health", "url": target_url}
+
+        if "bash" in lower or "run " in lower:
             cmd = instruction.replace("bash", "").replace("run", "").strip()
             return {"action": "bash", "command": cmd, "reason": "User command"}
 
-        return {"action": "chat_response", "reply": "I am online in your autonomous Docker computer. Ready for your instructions."}
+        return {"action": "chat_response", "reply": f"Hello Avi, I am online in your autonomous 24/7 cloud computer. Ready for your instructions."}
 
     def execute_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Dispatch action to container tools."""
+        """Dispatch action to container tools or social plugins."""
         act = action.get("action", "")
 
+        # ── Social Media & Website Plugins ────────────────────────────────────
+        plugin_actions = {
+            "check_site_health", "publish_wordpress_post",
+            "post_facebook", "post_instagram", "post_linkedin",
+            "send_whatsapp_business", "youtube_seo", "search_youtube"
+        }
+        if act in plugin_actions:
+            res = self.plugins.dispatch(act, action)
+            return {"action": act, "result": res, "reply": f"Executed {act.replace('_', ' ')}."}
+
+        # ── Core Container OS Tools ───────────────────────────────────────────
         if act == "bash":
             cmd = action.get("command", "")
             res = self.tools.run_bash(cmd)
@@ -172,13 +215,13 @@ class AutonomousAgent:
             inst = action.get("instruction", "")
             interval = int(action.get("interval_minutes", 60))
             task_info = self.task_daemon.add_scheduled_task(name, inst, interval)
-            return {"action": act, "task": task_info, "reply": f"Scheduled task '{name}' every {interval} minutes."}
+            return {"action": act, "task": task_info, "reply": f"Avi, scheduled task '{name}' every {interval} minutes."}
 
         elif act == "run_async":
             name = action.get("name", "Async Job")
             inst = action.get("instruction", "")
             t_id = self.task_daemon.run_async_task(name, inst)
-            return {"action": act, "task_id": t_id, "reply": f"Started background job '{name}' (ID: {t_id})."}
+            return {"action": act, "task_id": t_id, "reply": f"Avi, started background job '{name}' (ID: {t_id})."}
 
         elif act == "system_status":
             res = self.tools.get_system_status()
@@ -196,7 +239,7 @@ class AutonomousAgent:
 
     def execute_instruction(self, instruction: str) -> dict[str, Any]:
         """High-level end-to-end execution of a user instruction."""
-        logger.info("Executing instruction in container: %s", instruction)
+        logger.info("Executing instruction in container for Avi: %s", instruction)
         action = self.parse_action(instruction)
         result = self.execute_action(action)
         # Record turn in persistent memory

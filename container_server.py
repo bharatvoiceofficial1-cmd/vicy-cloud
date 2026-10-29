@@ -1,11 +1,12 @@
 """
-container_server.py — VICY 24/7 Cloud AI Core & Mission Control.
+container_server.py — VICY 24/7 Cloud AI Core & Mission Control for Avi.
 
-Designed for Render.com deployment:
+Features:
   - 24/7 Self-Keepalive loop (prevents Render free tier from sleeping)
   - Interactive Cyber Mission Control Web Dashboard on `/`
-  - WebSocket `/ws` for real-time live terminal streaming
-  - REST API for instructions, background tasks, and file management
+  - Interactive Phone Call Voice IVR on `/api/voice/ivr` (Avi can talk & assign tasks on call!)
+  - Multi-Channel Notification Orchestration (Phone Call -> SMS -> Email)
+  - Social Media & Website Manager Plugin APIs
   - Health check endpoint on `/healthz`
 """
 
@@ -22,18 +23,20 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
 from autonomous_agent import AutonomousAgent
+from notifier import Notifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("vicy_cloud")
 
 app = FastAPI(title="VICY 24/7 Autonomous Cloud Core")
 agent = AutonomousAgent()
+notifier = Notifier()
 active_sockets: list[WebSocket] = []
 START_TIME = time.time()
 
@@ -42,10 +45,20 @@ class InstructionRequest(BaseModel):
     instruction: str
 
 
+class OrchestrateRequest(BaseModel):
+    task_name: str
+    instruction: str
+
+
 class ScheduleTaskRequest(BaseModel):
     name: str
     instruction: str
     interval_minutes: int = 60
+
+
+class PluginDispatchRequest(BaseModel):
+    action: str
+    params: dict[str, Any] = {}
 
 
 # ── 24/7 Self-Keepalive for Render ──────────────────────────────────────────
@@ -67,7 +80,7 @@ def _keepalive_loop():
                 logger.debug("Keepalive ping successful: HTTP %d", resp.status)
         except Exception as exc:
             logger.warning("Keepalive ping notice: %s", exc)
-        time.sleep(600)  # Ping every 10 minutes
+        time.sleep(600)
 
 
 threading.Thread(target=_keepalive_loop, daemon=True).start()
@@ -207,22 +220,22 @@ async def root() -> str:
             <h1>VICY // 24x7 CLOUD AUTONOMOUS SANDBOX</h1>
             <div class="status-pill">
                 <div class="dot"></div>
-                <span id="liveStatus">CLOUD HOSTED: LIVE 24/7</span>
+                <span id="liveStatus">CLOUD HOSTED: LIVE 24/7 (AVI'S MISSION CONTROL)</span>
             </div>
         </div>
 
         <div class="grid">
             <div class="card">
-                <h3>CLOUD ENVIRONMENT</h3>
-                <p><strong>Hosting Platform:</strong> Render.com (Global Cloud)</p>
-                <p><strong>Agent Brain:</strong> Gemini 3 Flash Preview + Persistent Memory</p>
+                <h3>CLOUD ENVIRONMENT FOR AVI</h3>
+                <p><strong>Owner:</strong> Avi (+918840795166)</p>
+                <p><strong>Escalation Channel:</strong> Voice Call &rarr; SMS &rarr; Email (PC Off Mode)</p>
                 <p><strong>Execution Core:</strong> Isolated Linux Container (/workspace)</p>
-                <p><strong>Uptime:</strong> Running continuously in cloud 24/7 even when your PC is off</p>
+                <p><strong>Plugins Active:</strong> YouTube SEO, Instagram, FB Pages, WhatsApp, LinkedIn, WordPress</p>
             </div>
             <div class="card">
                 <h3>DISPATCH INSTRUCTION</h3>
                 <div class="cmd-row">
-                    <input type="text" id="cmdInput" placeholder="e.g. 'write a python scraper', 'schedule news summary every 60 min', 'bash ls -la'">
+                    <input type="text" id="cmdInput" placeholder="e.g. 'write a python scraper', 'check website status https://google.com', 'schedule news summary every 60 min'">
                     <button onclick="sendCmd()">DISPATCH</button>
                 </div>
             </div>
@@ -247,7 +260,7 @@ async def root() -> str:
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-            ws.onopen = () => appendLog("Neural uplink connected to 24x7 Cloud Sandbox.", "line-sys");
+            ws.onopen = () => appendLog("Neural uplink connected. Welcome back, Avi.", "line-sys");
             ws.onmessage = (e) => {
                 const data = JSON.parse(e.data);
                 if (data.reply) appendLog(data.reply, "line-agent");
@@ -260,7 +273,7 @@ async def root() -> str:
                 const inp = document.getElementById('cmdInput');
                 const val = inp.value.trim();
                 if (!val) return;
-                appendLog(`> USER: ${val}`, "line-user");
+                appendLog(`> AVI: ${val}`, "line-user");
                 ws.send(JSON.stringify({ instruction: val }));
                 inp.value = '';
             }
@@ -274,15 +287,50 @@ async def root() -> str:
     """
 
 
-# ── Health check & API ──────────────────────────────────────────────────────
+# ── Interactive Phone Call Voice IVR (Avi can talk on the phone!) ────────────
+
+@app.post("/api/voice/ivr")
+async def voice_ivr_webhook(request: Request) -> Response:
+    """
+    Twilio Voice Webhook:
+    When Avi speaks over the phone, Twilio sends SpeechResult.
+    VICY executes the spoken command and speaks back!
+    """
+    form_data = await request.form()
+    speech_result = form_data.get("SpeechResult", "")
+
+    if speech_result:
+        logger.info("Avi spoke command over phone: %s", speech_result)
+        res = agent.execute_instruction(str(speech_result))
+        summary = str(res.get("reply") or res.get("result") or "Action complete")[:250].replace("<", "").replace(">", "")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi">Avi, I executed your request: {summary}.</Say>
+    <Gather input="speech" timeout="5" action="/api/voice/ivr">
+        <Say>You can give me another command now, or hang up.</Say>
+    </Gather>
+</Response>"""
+    else:
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi">Hello Avi, this is VICY. Your autonomous cloud assistant is listening.</Say>
+    <Gather input="speech" timeout="6" action="/api/voice/ivr">
+        <Say>Please speak your command after the tone.</Say>
+    </Gather>
+</Response>"""
+
+    return Response(content=twiml, media_type="application/xml")
+
+
+# ── Health Check, Execution & Plugins ───────────────────────────────────────
 
 @app.get("/healthz")
 async def health_check() -> dict[str, Any]:
-    """Health check endpoint for Render keepalive."""
     uptime_sec = int(time.time() - START_TIME)
     return {
         "status": "healthy",
         "service": "VICY 24/7 Cloud Core",
+        "owner": "Avi",
         "uptime_seconds": uptime_sec,
         "tasks_running": len(agent.task_daemon.list_tasks()),
     }
@@ -292,6 +340,8 @@ async def health_check() -> dict[str, Any]:
 async def get_status() -> dict[str, Any]:
     return {
         "status": "online",
+        "owner": "Avi",
+        "phone": "+918840795166",
         "system": agent.tools.get_system_status(),
         "tasks": agent.task_daemon.list_tasks(),
     }
@@ -300,6 +350,31 @@ async def get_status() -> dict[str, Any]:
 @app.post("/api/instruct")
 async def instruct(req: InstructionRequest) -> dict[str, Any]:
     return agent.execute_instruction(req.instruction)
+
+
+@app.post("/api/orchestrate")
+async def orchestrate_task(req: OrchestrateRequest) -> dict[str, Any]:
+    """Execute task on cloud and escalate notifications to Avi."""
+    result = agent.execute_instruction(req.instruction)
+    summary = str(result.get("reply") or result.get("result") or result)[:400]
+    
+    # Notify Avi via Call -> SMS -> Email
+    notify_res = notifier.notify_task_complete(
+        task_name=req.task_name,
+        result_summary=summary,
+        pc_is_online=False
+    )
+    return {
+        "task_name": req.task_name,
+        "result": result,
+        "notifications": notify_res,
+    }
+
+
+@app.post("/api/plugins/dispatch")
+async def dispatch_plugin(req: PluginDispatchRequest) -> dict[str, Any]:
+    """Dispatch action to YouTube, Meta, WhatsApp, LinkedIn, or Website plugins."""
+    return agent.plugins.dispatch(req.action, req.params)
 
 
 @app.post("/api/tasks/schedule")
@@ -318,7 +393,7 @@ async def websocket_terminal(websocket: WebSocket) -> None:
     await websocket.accept()
     active_sockets.append(websocket)
     try:
-        await websocket.send_text(json.dumps({"type": "info", "message": "24/7 Cloud Core Online."}))
+        await websocket.send_text(json.dumps({"type": "info", "message": "24/7 Cloud Core Online for Avi."}))
         while True:
             raw = await websocket.receive_text()
             try:
@@ -336,5 +411,5 @@ async def websocket_terminal(websocket: WebSocket) -> None:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    logger.info("Starting VICY Cloud Server on port %d...", port)
+    logger.info("Starting VICY Cloud Server for Avi on port %d...", port)
     uvicorn.run(app, host="0.0.0.0", port=port)
